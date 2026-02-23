@@ -48,6 +48,7 @@
             android:name=".ble.BleForegroundService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice" />
 
         <!-- Accessibility Service: detects clicks and reads visible screen text for logging -->

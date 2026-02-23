@@ -1,6 +1,5 @@
 package com.guruprasad.developmenttask.ble
 
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,30 +10,26 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.guruprasad.developmenttask.BleApplication
 import com.guruprasad.developmenttask.MainActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
-/**
- * Foreground Service that keeps the BLE GATT connection alive while the app is backgrounded.
- *
- * Started by [AndroidBleRepository] when a device connects ([start]) and stopped on
- * disconnect or when Bluetooth is disabled ([stop]).
- *
- * Posts a persistent notification so the user is aware the connection is active and
- * Android does not kill the process. The notification channel uses
- * [android.app.NotificationManager.IMPORTANCE_LOW] to avoid audible alerts.
- *
- * The [LocalBinder] allows [MainActivity] to bind and hold a reference to the running
- * service instance for lifecycle management.
- */
 class BleForegroundService : Service() {
 
     companion object {
         private const val TAG = "BleForegroundService"
         private const val CHANNEL_ID = "ble_connection_channel"
         private const val NOTIFICATION_ID = 1001
+        private const val PREFS_NAME = "ble_prefs"
+        private const val KEY_LAST_DEVICE_ADDRESS = "last_device_address"
+        private const val KEY_LAST_DEVICE_NAME = "last_device_name"
 
         fun start(context: Context) {
             val intent = Intent(context, BleForegroundService::class.java)
@@ -48,6 +43,29 @@ class BleForegroundService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, BleForegroundService::class.java))
         }
+
+        @Suppress("unused")
+        fun saveLastDevice(context: Context, address: String, name: String?) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(KEY_LAST_DEVICE_ADDRESS, address)
+                .putString(KEY_LAST_DEVICE_NAME, name ?: "")
+                .apply()
+        }
+
+        @Suppress("unused")
+        fun clearLastDevice(context: Context) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .remove(KEY_LAST_DEVICE_ADDRESS)
+                .remove(KEY_LAST_DEVICE_NAME)
+                .apply()
+        }
+
+        fun getLastDevice(context: Context): BleDevice? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val address = prefs.getString(KEY_LAST_DEVICE_ADDRESS, null) ?: return null
+            val name = prefs.getString(KEY_LAST_DEVICE_NAME, null)?.takeIf { it.isNotBlank() }
+            return BleDevice(name = name, address = address, rssi = 0)
+        }
     }
 
     inner class LocalBinder : Binder() {
@@ -55,6 +73,7 @@ class BleForegroundService : Service() {
     }
 
     private val binder = LocalBinder()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -64,37 +83,52 @@ class BleForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-        Log.d(TAG, "Service started in foreground")
+        Log.d(TAG, "Service onStartCommand — ensuring BLE connection is live")
+        ensureConnected()
         return START_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder = binder
 
     /**
-     * Called when the user removes the app from the Recents screen.
-     * Re-schedule a restart so the BLE connection is preserved even after the task is removed.
+     * With android:stopWithTask="false" this service is NOT stopped when the task is removed.
+     * onTaskRemoved is still called — we use it to re-trigger connection insurance.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d(TAG, "Task removed — scheduling service restart to keep BLE connection alive")
-        val restartIntent = Intent(applicationContext, BleForegroundService::class.java)
-        val pendingIntent = PendingIntent.getService(
-            applicationContext,
-            1,
-            restartIntent,
-            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
-        alarmManager.set(
-            AlarmManager.ELAPSED_REALTIME,
-            SystemClock.elapsedRealtime() + 1_000L,
-            pendingIntent
-        )
+        Log.d(TAG, "Task removed — BLE service stays alive (stopWithTask=false)")
+        ensureConnected()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceScope.cancel()
         Log.d(TAG, "Service destroyed")
+    }
+
+    /**
+     * Checks if the repository is currently connected. If not, looks up the last saved
+     * device from SharedPreferences and reconnects. This handles both START_STICKY restarts
+     * and task-removed events where the GATT may have been dropped.
+     */
+    private fun ensureConnected() {
+        val repository = (application as? BleApplication)?.bleRepository ?: run {
+            Log.w(TAG, "BleApplication not available — cannot ensure connection")
+            return
+        }
+        serviceScope.launch {
+            val state = repository.connectionState.first()
+            Log.d(TAG, "Current connection state in service: $state")
+            if (state !is ConnectionState.Connected && state !is ConnectionState.Connecting && state !is ConnectionState.Reconnecting) {
+                val lastDevice = getLastDevice(applicationContext)
+                if (lastDevice != null) {
+                    Log.d(TAG, "Reconnecting to last device: ${lastDevice.address}")
+                    repository.connect(lastDevice)
+                } else {
+                    Log.d(TAG, "No saved device to reconnect to")
+                }
+            }
+        }
     }
 
     private fun createNotificationChannel() {
@@ -107,8 +141,7 @@ class BleForegroundService : Service() {
                 description = "Keeps the BLE connection active in the background"
                 setShowBadge(false)
             }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
