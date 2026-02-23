@@ -12,13 +12,25 @@ import com.guruprasad.developmenttask.ble.BleRepository
 import com.guruprasad.developmenttask.ble.BleViewModel
 import kotlin.reflect.KClass
 
+/** Route name constants used by the [BleNavigation] NavHost. */
 object Routes {
     const val DEVICE_LIST = "device_list"
     const val DEVICE_DETAIL = "device_detail"
 }
 
+/**
+ * Root Compose navigation graph for the BLE application.
+ *
+ * Hosts two destinations:
+ * - [Routes.DEVICE_LIST] — [DeviceListScreen]: scan and select a device.
+ * - [Routes.DEVICE_DETAIL] — [DeviceDetailScreen]: view real-time device details.
+ *
+ * @param repository Platform-specific [BleRepository] used to create the [BleViewModel].
+ * @param sharedViewModel Optional pre-created [BleViewModel] (supplied by [MainActivity]
+ *   so the ViewModel survives navigation without being re-created).
+ */
 @Composable
-fun BleNavigation(repository: BleRepository) {
+fun BleNavigation(repository: BleRepository, sharedViewModel: BleViewModel? = null) {
     val navController = rememberNavController()
 
     @Suppress("UNCHECKED_CAST")
@@ -27,7 +39,7 @@ fun BleNavigation(repository: BleRepository) {
             return BleViewModel(repository) as T
         }
     }
-    val viewModel: BleViewModel = viewModel(factory = factory)
+    val viewModel: BleViewModel = sharedViewModel ?: viewModel(factory = factory)
 
     NavHost(navController = navController, startDestination = Routes.DEVICE_LIST) {
         composable(Routes.DEVICE_LIST) {

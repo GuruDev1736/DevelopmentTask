@@ -1,5 +1,6 @@
 package com.guruprasad.developmenttask.ble
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,10 +11,24 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.guruprasad.developmenttask.MainActivity
 
+/**
+ * Foreground Service that keeps the BLE GATT connection alive while the app is backgrounded.
+ *
+ * Started by [AndroidBleRepository] when a device connects ([start]) and stopped on
+ * disconnect or when Bluetooth is disabled ([stop]).
+ *
+ * Posts a persistent notification so the user is aware the connection is active and
+ * Android does not kill the process. The notification channel uses
+ * [android.app.NotificationManager.IMPORTANCE_LOW] to avoid audible alerts.
+ *
+ * The [LocalBinder] allows [MainActivity] to bind and hold a reference to the running
+ * service instance for lifecycle management.
+ */
 class BleForegroundService : Service() {
 
     companion object {
@@ -55,6 +70,28 @@ class BleForegroundService : Service() {
 
     override fun onBind(intent: Intent): IBinder = binder
 
+    /**
+     * Called when the user removes the app from the Recents screen.
+     * Re-schedule a restart so the BLE connection is preserved even after the task is removed.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "Task removed — scheduling service restart to keep BLE connection alive")
+        val restartIntent = Intent(applicationContext, BleForegroundService::class.java)
+        val pendingIntent = PendingIntent.getService(
+            applicationContext,
+            1,
+            restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+        alarmManager.set(
+            AlarmManager.ELAPSED_REALTIME,
+            SystemClock.elapsedRealtime() + 1_000L,
+            pendingIntent
+        )
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service destroyed")
@@ -70,7 +107,7 @@ class BleForegroundService : Service() {
                 description = "Keeps the BLE connection active in the background"
                 setShowBadge(false)
             }
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }

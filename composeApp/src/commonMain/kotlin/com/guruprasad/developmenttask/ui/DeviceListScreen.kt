@@ -1,6 +1,7 @@
 package com.guruprasad.developmenttask.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +23,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -31,6 +34,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -39,6 +43,19 @@ import com.guruprasad.developmenttask.ble.BleDevice
 import com.guruprasad.developmenttask.ble.BleViewModel
 import com.guruprasad.developmenttask.ble.ConnectionState
 
+/**
+ * Scan screen — lists all nearby BLE devices discovered by [BleViewModel.startScan].
+ *
+ * Features:
+ * - Real-time device list sorted by descending RSSI, updated via [BleViewModel.scannedDevices].
+ * - Search field and "Named only" toggle backed by [BleViewModel.filterConfig] / [BleFilterConfig].
+ * - Signal strength badge: Strong (≥ -60 dBm) / Medium (≥ -80 dBm) / Weak (< -80 dBm).
+ * - Bluetooth disabled banner shown when [BleViewModel.isBluetoothEnabled] is `false`.
+ * - Scan / Stop button with animated progress indicator while scanning.
+ *
+ * @param viewModel Shared [BleViewModel] instance.
+ * @param onDeviceSelected Callback invoked when the user taps a [BleDevice] row.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceListScreen(
@@ -47,6 +64,8 @@ fun DeviceListScreen(
 ) {
     val devices by viewModel.scannedDevices.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
+    val isBluetoothEnabled by viewModel.isBluetoothEnabled.collectAsState()
+    val filterConfig by viewModel.filterConfig.collectAsState()
     val isScanning = connectionState is ConnectionState.Scanning
 
     Scaffold(
@@ -69,6 +88,33 @@ fun DeviceListScreen(
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(modifier = Modifier.height(16.dp))
+
+            if (!isBluetoothEnabled) {
+                BluetoothDisabledBanner()
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            OutlinedTextField(
+                value = filterConfig.nameQuery,
+                onValueChange = { viewModel.updateFilter(filterConfig.copy(nameQuery = it)) },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search by name or address…") },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = "Named devices only", style = MaterialTheme.typography.bodySmall)
+                Switch(
+                    checked = filterConfig.namedOnly,
+                    onCheckedChange = { viewModel.updateFilter(filterConfig.copy(namedOnly = it)) }
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -218,3 +264,34 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun BluetoothDisabledBanner() {
+    val color = Color(0xFFF44336)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(color.copy(alpha = 0.10f))
+            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = "🔴", fontSize = 18.sp)
+        Spacer(modifier = Modifier.width(10.dp))
+        Column {
+            Text(
+                text = "Bluetooth is Disabled",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(
+                text = "Please enable Bluetooth to scan for devices",
+                style = MaterialTheme.typography.bodySmall,
+                color = color.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+

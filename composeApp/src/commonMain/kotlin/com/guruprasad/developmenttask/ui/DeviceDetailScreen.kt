@@ -39,9 +39,20 @@ import com.guruprasad.developmenttask.ble.BleViewModel
 import com.guruprasad.developmenttask.ble.ConnectionState
 
 /**
- * Shows the details of the currently connected BLE device:
- *  - Device name, MAC address / UUID, battery percentage
- *  - Real-time connection state indicator
+ * Device detail screen — shows real-time information about the connected BLE peripheral.
+ *
+ * Displayed information (all updated via StateFlow / `collectAsState`):
+ * - **Device Name** — from [BleViewModel.deviceInfo]
+ * - **Address / UUID** — MAC address on Android; UUID string on iOS
+ * - **Signal Strength** — RSSI in dBm
+ * - **Battery %** — from [BleViewModel.batteryLevel]; spinner shown while GATT read is pending
+ * - **Heart Rate** — from [BleViewModel.heartRate]; only shown when the device exposes 0x2A37
+ * - **Connection state banner** — reflects [BleViewModel.connectionState] with colour coding
+ *
+ * Pressing **Disconnect** calls [onBack] which triggers [BleViewModel.disconnect] in the NavGraph.
+ *
+ * @param viewModel Shared [BleViewModel] instance.
+ * @param onBack Callback invoked when the user disconnects or navigates back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +62,8 @@ fun DeviceDetailScreen(
 ) {
     val device by viewModel.deviceInfo.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
+    val batteryLevel by viewModel.batteryLevel.collectAsState()
+    val heartRate by viewModel.heartRate.collectAsState()
 
     Scaffold(
         topBar = {
@@ -96,12 +109,14 @@ fun DeviceDetailScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+
                         InfoRow(label = "Name", value = dev.displayName)
                         Spacer(modifier = Modifier.height(8.dp))
                         InfoRow(label = "Address / UUID", value = dev.address)
                         Spacer(modifier = Modifier.height(8.dp))
                         InfoRow(label = "Signal Strength", value = "${dev.rssi} dBm")
                         Spacer(modifier = Modifier.height(8.dp))
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -112,14 +127,47 @@ fun DeviceDetailScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (dev.batteryLevel != null) {
-                                BatteryIndicator(level = dev.batteryLevel)
+                            if (batteryLevel != null) {
+                                BatteryIndicator(level = batteryLevel!!)
                             } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(14.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Reading…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                            }
+                        }
+
+                        if (heartRate != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "Reading...",
+                                    text = "Heart Rate",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.outline
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(text = "❤️", fontSize = 16.sp)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "$heartRate bpm",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE91E63)
+                                    )
+                                }
                             }
                         }
                     }
@@ -131,7 +179,7 @@ fun DeviceDetailScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator()
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Connecting to device...", style = MaterialTheme.typography.bodyMedium)
+                    Text("Connecting to device…", style = MaterialTheme.typography.bodyMedium)
                 }
             }
 
@@ -151,12 +199,13 @@ fun DeviceDetailScreen(
 @Composable
 private fun ConnectionStateBanner(state: ConnectionState) {
     val (text, color) = when (state) {
-        ConnectionState.Connected    -> "● Connected"        to Color(0xFF4CAF50)
-        ConnectionState.Connecting  -> "⟳ Connecting…"     to Color(0xFF2196F3)
-        ConnectionState.Reconnecting-> "⟳ Reconnecting…"   to Color(0xFFFF9800)
-        ConnectionState.Scanning    -> "◎ Scanning…"        to Color(0xFF9C27B0)
-        ConnectionState.Disconnected-> "○ Disconnected"     to Color(0xFF9E9E9E)
-        is ConnectionState.Error    -> "✕ ${state.message}" to Color(0xFFF44336)
+        ConnectionState.Connected          -> "● Connected"          to Color(0xFF4CAF50)
+        ConnectionState.Connecting        -> "⟳ Connecting…"        to Color(0xFF2196F3)
+        ConnectionState.Reconnecting      -> "⟳ Reconnecting…"      to Color(0xFFFF9800)
+        ConnectionState.Scanning          -> "◎ Scanning…"           to Color(0xFF9C27B0)
+        ConnectionState.Disconnected      -> "○ Disconnected"        to Color(0xFF9E9E9E)
+        ConnectionState.BluetoothDisabled -> "🔴 Bluetooth Off"      to Color(0xFFF44336)
+        is ConnectionState.Error          -> "✕ ${state.message}"    to Color(0xFFF44336)
     }
     Box(
         modifier = Modifier
@@ -178,8 +227,16 @@ private fun ConnectionStateBanner(state: ConnectionState) {
 @Composable
 private fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(text = label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -193,6 +250,11 @@ private fun BatteryIndicator(level: Int) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(text = if (level >= 40) "🔋" else "🪫", fontSize = 18.sp)
         Spacer(modifier = Modifier.width(4.dp))
-        Text(text = "$level%", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = color)
+        Text(
+            text = "$level%",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
     }
 }
