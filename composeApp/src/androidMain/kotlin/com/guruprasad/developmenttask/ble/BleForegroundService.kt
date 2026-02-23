@@ -14,12 +14,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.guruprasad.developmenttask.MainActivity
 
-/**
- * Foreground Service that keeps the BLE connection alive while the app is in the background.
- *
- * Start with [BleForegroundService.start] when a device connects.
- * Stop with [BleForegroundService.stop] when the user disconnects.
- */
 class BleForegroundService : Service() {
 
     companion object {
@@ -98,4 +92,3 @@ class BleForegroundService : Service() {
             .build()
     }
 }
-

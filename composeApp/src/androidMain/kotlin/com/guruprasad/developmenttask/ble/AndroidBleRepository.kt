@@ -32,31 +32,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-/**
- * Android implementation of [BleRepository].
- *
- * Uses [android.bluetooth.le.BluetoothLeScanner] for device discovery and
- * [android.bluetooth.BluetoothGatt] for GATT connections.
- *
- * A [BleForegroundService] is started when a connection is established so the
- * connection survives when the user moves the app to the background.
- *
- * **Battery Service** (standard GATT):
- *  - Service UUID : `0x180F`
- *  - Characteristic UUID : `0x2A19`
- */
 @SuppressLint("MissingPermission")
 class AndroidBleRepository(private val context: Context) : BleRepository {
 
     companion object {
         private const val TAG = "AndroidBleRepository"
 
-        // Standard Battery Service UUIDs
         val BATTERY_SERVICE_UUID: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         val BATTERY_LEVEL_CHAR_UUID: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-        // Heart Rate Service (optional)
         val HEART_RATE_SERVICE_UUID: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
         val HEART_RATE_CHAR_UUID: UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
 
@@ -65,17 +50,14 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         private const val SCAN_AUTO_STOP_MS = 30_000L
     }
 
-    // ── Bluetooth adapter ───────────────────────────────────────────────────
     private val bluetoothManager: BluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
 
-    // ── Coroutines ─────────────────────────────────────────────────────────
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectJob: Job? = null
     private var scanAutoStopJob: Job? = null
 
-    // ── State flows ────────────────────────────────────────────────────────
     private val _scannedDevices = MutableStateFlow<List<BleDevice>>(emptyList())
     override val scannedDevices: Flow<List<BleDevice>> = _scannedDevices.asStateFlow()
 
@@ -85,13 +67,11 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
     private val _deviceInfo = MutableStateFlow<BleDevice?>(null)
     override val deviceInfo: Flow<BleDevice?> = _deviceInfo.asStateFlow()
 
-    // ── Internal state ─────────────────────────────────────────────────────
     private var bluetoothGatt: BluetoothGatt? = null
     private var targetDevice: BleDevice? = null
     private var reconnectAttempts = 0
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ── Permission check ───────────────────────────────────────────────────
     private fun hasBluetoothPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) ==
@@ -104,7 +84,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         }
     }
 
-    // ── Scan ───────────────────────────────────────────────────────────────
     override fun startScan() {
         if (!hasBluetoothPermissions()) {
             _connectionState.value = ConnectionState.Error("Bluetooth permissions not granted")
@@ -125,7 +104,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         bluetoothAdapter.bluetoothLeScanner?.startScan(null, settings, scanCallback)
         Log.d(TAG, "BLE scan started")
 
-        // Auto-stop after 30 seconds to preserve battery
         scanAutoStopJob?.cancel()
         scanAutoStopJob = scope.launch {
             delay(SCAN_AUTO_STOP_MS)
@@ -150,12 +128,10 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
             val current = _scannedDevices.value.toMutableList()
             val idx = current.indexOfFirst { it.address == device.address }
             if (idx >= 0) {
-                // Update RSSI for existing entry
                 current[idx] = current[idx].copy(rssi = device.rssi)
             } else {
                 current.add(device)
             }
-            // Sort by RSSI descending (strongest signal first)
             _scannedDevices.value = current.sortedByDescending { it.rssi }
         }
 
@@ -166,13 +142,11 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
     }
 
     private fun ScanResult.toMyBleDevice(): BleDevice = BleDevice(
-        // scanRecord?.deviceName is often more reliable than device.name for BLE advertisements
         name = (scanRecord?.deviceName?.takeIf { it.isNotBlank() } ?: device.name?.takeIf { it.isNotBlank() }),
         address = device.address,
         rssi = rssi
     )
 
-    // ── Connect ────────────────────────────────────────────────────────────
     override suspend fun connect(device: BleDevice) {
         if (!hasBluetoothPermissions()) {
             _connectionState.value = ConnectionState.Error("Bluetooth permissions not granted")
@@ -192,7 +166,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         _connectionState.value = ConnectionState.Connecting
         Log.d(TAG, "Connecting to $address …")
 
-        // GATT connection must be initiated on the main thread
         mainHandler.post {
             bluetoothGatt?.close()
             bluetoothGatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -209,7 +182,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         }
     }
 
-    // ── Disconnect ─────────────────────────────────────────────────────────
     override fun disconnect() {
         reconnectJob?.cancel()
         targetDevice = null
@@ -221,13 +193,10 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         }
         _connectionState.value = ConnectionState.Disconnected
         _deviceInfo.value = null
-
-        // Stop the foreground service
         BleForegroundService.stop(context)
         Log.d(TAG, "Disconnected and cleaned up")
     }
 
-    // ── GATT callback ──────────────────────────────────────────────────────
     private val gattCallback = object : BluetoothGattCallback() {
 
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -237,7 +206,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                     Log.d(TAG, "Connected – discovering services…")
                     _connectionState.value = ConnectionState.Connected
                     reconnectAttempts = 0
-                    // Start foreground service to keep connection alive in background
                     BleForegroundService.start(context)
                     mainHandler.post { gatt.discoverServices() }
                 }
@@ -277,16 +245,8 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                 return
             }
             Log.d(TAG, "Services discovered")
-
-            // Update device info with basic info right after connecting
-            targetDevice?.let { dev ->
-                _deviceInfo.value = dev
-            }
-
-            // Read battery level
+            targetDevice?.let { dev -> _deviceInfo.value = dev }
             readBatteryLevel(gatt)
-
-            // Enable heart-rate notifications if service is available
             enableHeartRateNotifications(gatt)
         }
 
@@ -301,7 +261,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
             }
         }
 
-        // API 33+
         @Suppress("OVERRIDE_DEPRECATION")
         override fun onCharacteristicRead(
             gatt: BluetoothGatt,
@@ -322,7 +281,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
             handleCharacteristicValue(characteristic.uuid, characteristic.value)
         }
 
-        // API 33+
         @Suppress("OVERRIDE_DEPRECATION")
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
@@ -340,8 +298,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
             Log.d(TAG, "Descriptor written: ${descriptor.characteristic.uuid} status=$status")
         }
     }
-
-    // ── Characteristic helpers ─────────────────────────────────────────────
 
     private fun readBatteryLevel(gatt: BluetoothGatt) {
         val service = gatt.getService(BATTERY_SERVICE_UUID) ?: run {
@@ -384,7 +340,6 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                 _deviceInfo.value = _deviceInfo.value?.copy(batteryLevel = battery)
             }
             HEART_RATE_CHAR_UUID -> {
-                // Heart rate flag byte: bit 0 = 0 means HR is UInt8, bit 0 = 1 means UInt16
                 val hr = value?.let {
                     if (it.isNotEmpty()) {
                         val flag = it[0].toInt()
@@ -394,12 +349,10 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                     } else null
                 }
                 Log.d(TAG, "Heart rate: $hr bpm")
-                // Currently stored in deviceInfo – could extend BleDevice with heartRate field
             }
         }
     }
 
-    // ── Auto-reconnect ─────────────────────────────────────────────────────
     private fun scheduleReconnect() {
         reconnectAttempts++
         val delay = RECONNECT_DELAY_MS * reconnectAttempts
@@ -416,5 +369,3 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         }
     }
 }
-
-

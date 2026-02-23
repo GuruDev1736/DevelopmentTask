@@ -39,10 +39,6 @@ import com.guruprasad.developmenttask.ble.BleDevice
 import com.guruprasad.developmenttask.ble.BleViewModel
 import com.guruprasad.developmenttask.ble.ConnectionState
 
-/**
- * Displays a list of scanned BLE devices.
- * Provides Scan / Stop Scan controls and navigates to [DeviceDetailScreen] on device tap.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceListScreen(
@@ -57,10 +53,7 @@ fun DeviceListScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "BLE Scanner",
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = "BLE Scanner", fontWeight = FontWeight.Bold)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -77,7 +70,6 @@ fun DeviceListScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ── Scan controls ──────────────────────────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -98,35 +90,21 @@ fun DeviceListScreen(
 
                 if (isScanning) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { viewModel.stopScan() }) {
-                            Text("Stop")
-                        }
+                        Button(onClick = { viewModel.stopScan() }) { Text("Stop") }
                     }
                 } else {
-                    Button(onClick = { viewModel.startScan() }) {
-                        Text("Scan")
-                    }
+                    Button(onClick = { viewModel.startScan() }) { Text("Scan") }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ── Device list ────────────────────────────────────────────────
             if (devices.isEmpty() && !isScanning) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "🔵",
-                            fontSize = 48.sp
-                        )
+                        Text(text = "🔵", fontSize = 48.sp)
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "No devices found",
@@ -152,14 +130,12 @@ fun DeviceListScreen(
     }
 }
 
-// ── Device list item ──────────────────────────────────────────────────────────
-
 @Composable
 private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
     val rssiColor = when {
-        device.rssi >= -60 -> Color(0xFF4CAF50) // strong – green
-        device.rssi >= -80 -> Color(0xFFFF9800) // medium – orange
-        else               -> Color(0xFFF44336) // weak   – red
+        device.rssi >= -60 -> Color(0xFF4CAF50)
+        device.rssi >= -80 -> Color(0xFFFF9800)
+        else               -> Color(0xFFF44336)
     }
     val rssiLabel = when {
         device.rssi >= -60 -> "Strong"
@@ -168,9 +144,7 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
     }
 
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         colors = CardDefaults.cardColors(
@@ -181,32 +155,21 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
         )
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // ── Signal strength column ───────────────────────────────────
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.width(44.dp)
             ) {
-                // Bluetooth icon placeholder using text
                 Text(text = "📶", fontSize = 20.sp)
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = rssiLabel,
-                    fontSize = 9.sp,
-                    color = rssiColor,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = rssiLabel, fontSize = 9.sp, color = rssiColor, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // ── Device info ──────────────────────────────────────────────
             Column(modifier = Modifier.weight(1f)) {
-                // Device name — large and prominent
                 Text(
                     text = device.displayName,
                     style = MaterialTheme.typography.titleMedium,
@@ -217,18 +180,13 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
                         MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
-
                 Spacer(modifier = Modifier.height(3.dp))
-
-                // MAC address — always visible below the name
                 Text(
                     text = device.address,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                     letterSpacing = 0.5.sp
                 )
-
-                // If unnamed, show a hint label
                 if (!device.hasName) {
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
@@ -241,7 +199,6 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // ── RSSI badge ───────────────────────────────────────────────
             Column(horizontalAlignment = Alignment.End) {
                 Box(
                     modifier = Modifier
@@ -256,14 +213,8 @@ private fun DeviceItem(device: BleDevice, onClick: () -> Unit) {
                     )
                 }
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "dBm",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    fontSize = 9.sp
-                )
+                Text(text = "dBm", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, fontSize = 9.sp)
             }
         }
     }
 }
-

@@ -17,11 +17,6 @@ object Routes {
     const val DEVICE_DETAIL = "device_detail"
 }
 
-/**
- * Root navigation graph for the BLE application.
- *
- * @param repository Platform-specific [BleRepository] provided by the host.
- */
 @Composable
 fun BleNavigation(repository: BleRepository) {
     val navController = rememberNavController()

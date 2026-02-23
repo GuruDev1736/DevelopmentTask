@@ -28,16 +28,6 @@ import platform.Foundation.NSString
 import platform.Foundation.NSUUID
 import platform.darwin.NSObject
 
-/**
- * iOS implementation of [BleRepository] using CoreBluetooth.
- *
- * Uses [CBCentralManager] for scanning / connection management and
- * [CBPeripheral] for GATT characteristic reads.
- *
- * Background operation: The [CBCentralManager] is initialised with a
- * restore identifier so iOS can wake the app in the background and
- * restore the Bluetooth state.
- */
 class IosBleRepository : BleRepository {
 
     companion object {
@@ -45,20 +35,16 @@ class IosBleRepository : BleRepository {
         private const val MAX_RECONNECT_ATTEMPTS = 5
         private const val RECONNECT_DELAY_MS = 2_000L
 
-        // Standard Battery Service
         val BATTERY_SERVICE_UUID: CBUUID = CBUUID.UUIDWithString("180F")
         val BATTERY_CHAR_UUID: CBUUID = CBUUID.UUIDWithString("2A19")
 
-        // Optional Heart-Rate Service
         val HEART_RATE_SERVICE_UUID: CBUUID = CBUUID.UUIDWithString("180D")
         val HEART_RATE_CHAR_UUID: CBUUID = CBUUID.UUIDWithString("2A37")
     }
 
-    // ── Coroutine scope ────────────────────────────────────────────────────
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var reconnectJob: Job? = null
 
-    // ── State ──────────────────────────────────────────────────────────────
     private val _scannedDevices = MutableStateFlow<List<BleDevice>>(emptyList())
     override val scannedDevices: Flow<List<BleDevice>> = _scannedDevices.asStateFlow()
 
@@ -68,7 +54,6 @@ class IosBleRepository : BleRepository {
     private val _deviceInfo = MutableStateFlow<BleDevice?>(null)
     override val deviceInfo: Flow<BleDevice?> = _deviceInfo.asStateFlow()
 
-    // ── CoreBluetooth objects ──────────────────────────────────────────────
     private var centralManager: CBCentralManager? = null
     private var connectedPeripheral: CBPeripheral? = null
     private var targetDevice: BleDevice? = null
@@ -78,7 +63,6 @@ class IosBleRepository : BleRepository {
     private val peripheralDelegate = PeripheralDelegate()
 
     init {
-        // Initialise with restore identifier for background support
         centralManager = CBCentralManager(
             delegate = centralDelegate,
             queue = null,
@@ -89,15 +73,12 @@ class IosBleRepository : BleRepository {
         )
     }
 
-    // ── BleRepository implementation ───────────────────────────────────────
-
     override fun startScan() {
         _scannedDevices.value = emptyList()
         _connectionState.value = ConnectionState.Scanning
         if (centralManager?.state == CBCentralManagerStatePoweredOn) {
             centralManager?.scanForPeripheralsWithServices(null, options = null)
         }
-        // If not yet powered on, scan will be started in centralManagerDidUpdateState
     }
 
     override fun stopScan() {
@@ -125,12 +106,9 @@ class IosBleRepository : BleRepository {
         _deviceInfo.value = null
     }
 
-    // ── Internal helpers ───────────────────────────────────────────────────
-
     private fun performConnect(device: BleDevice) {
         _connectionState.value = ConnectionState.Connecting
 
-        // Try to find the peripheral in the known/scanned list first
         val uuidString = device.address
         val uuids = listOf(NSUUID(uUIDString = uuidString))
 
@@ -140,15 +118,10 @@ class IosBleRepository : BleRepository {
         ) as? List<CBPeripheral>
 
         val peripheral = knownPeripherals?.firstOrNull()
-            ?: run {
-                // Fallback: search in scanned cache by matching UUID string
-                null
-            }
 
         if (peripheral != null) {
             connectToPeripheral(peripheral)
         } else {
-            // Re-scan briefly to find the peripheral
             _connectionState.value = ConnectionState.Scanning
             centralManager?.scanForPeripheralsWithServices(null, options = null)
         }
@@ -177,17 +150,13 @@ class IosBleRepository : BleRepository {
         }
     }
 
-    // ── CBCentralManager delegate ──────────────────────────────────────────
-
     inner class CentralManagerDelegate : NSObject(), CBCentralManagerDelegateProtocol {
 
         override fun centralManagerDidUpdateState(central: CBCentralManager) {
             if (central.state == CBCentralManagerStatePoweredOn) {
-                // If a scan was requested before Bluetooth was ready, start it now
                 if (_connectionState.value is ConnectionState.Scanning) {
                     central.scanForPeripheralsWithServices(null, options = null)
                 }
-                // Re-connect to target device if we were trying to connect
                 if (_connectionState.value is ConnectionState.Connecting ||
                     _connectionState.value is ConnectionState.Reconnecting
                 ) {
@@ -219,7 +188,6 @@ class IosBleRepository : BleRepository {
             }
             _scannedDevices.value = current.sortedByDescending { it.rssi }
 
-            // If this is the device we're trying to connect to, connect now
             if (_connectionState.value is ConnectionState.Scanning &&
                 targetDevice?.address == address
             ) {
@@ -235,8 +203,6 @@ class IosBleRepository : BleRepository {
             _connectionState.value = ConnectionState.Connected
             reconnectAttempts = 0
             targetDevice?.let { _deviceInfo.value = it }
-
-            // Discover all services
             didConnectPeripheral.discoverServices(null)
         }
 
@@ -269,19 +235,15 @@ class IosBleRepository : BleRepository {
             }
         }
 
-        // State restoration
         override fun centralManager(
             central: CBCentralManager,
             willRestoreState: Map<Any?, *>
         ) {
-            // Re-attach delegate to any restored peripherals
             @Suppress("UNCHECKED_CAST")
             val peripherals = willRestoreState["kCBRestoredPeripherals"] as? List<CBPeripheral>
             peripherals?.forEach { it.delegate = peripheralDelegate }
         }
     }
-
-    // ── CBPeripheral delegate ──────────────────────────────────────────────
 
     inner class PeripheralDelegate : NSObject(), CBPeripheralDelegateProtocol {
 
@@ -333,7 +295,6 @@ class IosBleRepository : BleRepository {
                     _deviceInfo.value = _deviceInfo.value?.copy(batteryLevel = battery)
                 }
                 "2A37" -> {
-                    // Heart rate measurement parsing
                     if (byteArray.isNotEmpty()) {
                         val flags = byteArray[0].toInt()
                         val hr = if (flags and 0x01 == 0) {
@@ -343,7 +304,6 @@ class IosBleRepository : BleRepository {
                                 ((byteArray[2].toInt() and 0xFF) shl 8) or (byteArray[1].toInt() and 0xFF)
                             else null
                         }
-                        // Heart rate data available – could be exposed via a separate flow
                         println("Heart Rate: $hr bpm")
                     }
                 }
@@ -355,8 +315,6 @@ class IosBleRepository : BleRepository {
             didUpdateNotificationStateForCharacteristic: CBCharacteristic,
             error: NSError?
         ) {
-            // Notification subscription confirmed
         }
     }
 }
-
