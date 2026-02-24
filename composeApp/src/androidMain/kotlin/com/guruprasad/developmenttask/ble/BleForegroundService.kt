@@ -10,14 +10,17 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.edit
 import com.guruprasad.developmenttask.BleApplication
 import com.guruprasad.developmenttask.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -27,9 +30,10 @@ class BleForegroundService : Service() {
         private const val TAG = "BleForegroundService"
         private const val CHANNEL_ID = "ble_connection_channel"
         private const val NOTIFICATION_ID = 1001
-        private const val PREFS_NAME = "ble_prefs"
-        private const val KEY_LAST_DEVICE_ADDRESS = "last_device_address"
-        private const val KEY_LAST_DEVICE_NAME = "last_device_name"
+        const val PREFS_NAME = "ble_prefs"
+        const val KEY_LAST_DEVICE_ADDRESS = "last_device_address"
+        const val KEY_LAST_DEVICE_NAME = "last_device_name"
+        private const val WAKE_LOCK_TAG = "BleApp:BleWakeLock"
 
         fun start(context: Context) {
             val intent = Intent(context, BleForegroundService::class.java)
@@ -44,20 +48,18 @@ class BleForegroundService : Service() {
             context.stopService(Intent(context, BleForegroundService::class.java))
         }
 
-        @Suppress("unused")
         fun saveLastDevice(context: Context, address: String, name: String?) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .putString(KEY_LAST_DEVICE_ADDRESS, address)
-                .putString(KEY_LAST_DEVICE_NAME, name ?: "")
-                .apply()
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit {
+                putString(KEY_LAST_DEVICE_ADDRESS, address)
+                putString(KEY_LAST_DEVICE_NAME, name ?: "")
+            }
         }
 
-        @Suppress("unused")
         fun clearLastDevice(context: Context) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                .remove(KEY_LAST_DEVICE_ADDRESS)
-                .remove(KEY_LAST_DEVICE_NAME)
-                .apply()
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit {
+                remove(KEY_LAST_DEVICE_ADDRESS)
+                remove(KEY_LAST_DEVICE_NAME)
+            }
         }
 
         fun getLastDevice(context: Context): BleDevice? {
@@ -74,10 +76,12 @@ class BleForegroundService : Service() {
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        acquireWakeLock()
         Log.d(TAG, "Service created")
     }
 
@@ -90,43 +94,88 @@ class BleForegroundService : Service() {
 
     override fun onBind(intent: Intent): IBinder = binder
 
-    /**
-     * With android:stopWithTask="false" this service is NOT stopped when the task is removed.
-     * onTaskRemoved is still called — we use it to re-trigger connection insurance.
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d(TAG, "Task removed — BLE service stays alive (stopWithTask=false)")
-        ensureConnected()
+        Log.d(TAG, "Task removed — service stays alive, checking BLE connection")
+        serviceScope.launch {
+            delay(1000)
+            ensureConnected()
+        }
+        val restartIntent = Intent(applicationContext, BleForegroundService::class.java)
+        val pendingIntent = PendingIntent.getService(
+            applicationContext,
+            1,
+            restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        alarmManager.set(
+            android.app.AlarmManager.ELAPSED_REALTIME,
+            android.os.SystemClock.elapsedRealtime() + 2000,
+            pendingIntent
+        )
+        Log.d(TAG, "Scheduled service restart via AlarmManager")
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        releaseWakeLock()
         serviceScope.cancel()
-        Log.d(TAG, "Service destroyed")
+        Log.d(TAG, "Service destroyed — scheduling restart")
+        val restartIntent = Intent(applicationContext, BleForegroundService::class.java)
+        val pendingIntent = PendingIntent.getService(
+            applicationContext,
+            1,
+            restartIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+        alarmManager.set(
+            android.app.AlarmManager.ELAPSED_REALTIME,
+            android.os.SystemClock.elapsedRealtime() + 2000,
+            pendingIntent
+        )
     }
 
-    /**
-     * Checks if the repository is currently connected. If not, looks up the last saved
-     * device from SharedPreferences and reconnects. This handles both START_STICKY restarts
-     * and task-removed events where the GATT may have been dropped.
-     */
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            WAKE_LOCK_TAG
+        ).also {
+            it.acquire(60 * 60 * 1000L)
+        }
+        Log.d(TAG, "WakeLock acquired")
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error releasing wake lock: ${e.message}")
+        }
+        wakeLock = null
+        Log.d(TAG, "WakeLock released")
+    }
+
     private fun ensureConnected() {
-        val repository = (application as? BleApplication)?.bleRepository ?: run {
+        val repository: AndroidBleRepository = (application as? BleApplication)?.bleRepository ?: run {
             Log.w(TAG, "BleApplication not available — cannot ensure connection")
             return
         }
         serviceScope.launch {
             val state = repository.connectionState.first()
-            Log.d(TAG, "Current connection state in service: $state")
+            Log.d(TAG, "Current connection state: $state")
             if (state !is ConnectionState.Connected && state !is ConnectionState.Connecting && state !is ConnectionState.Reconnecting) {
                 val lastDevice = getLastDevice(applicationContext)
                 if (lastDevice != null) {
-                    Log.d(TAG, "Reconnecting to last device: ${lastDevice.address}")
-                    repository.connect(lastDevice)
+                    Log.d(TAG, "Reconnecting to saved device: ${lastDevice.address}")
+                    repository.connectFromService(lastDevice)
                 } else {
-                    Log.d(TAG, "No saved device to reconnect to")
+                    Log.d(TAG, "No saved device found — nothing to reconnect to")
                 }
+            } else {
+                Log.d(TAG, "Already connected or connecting — no action needed")
             }
         }
     }

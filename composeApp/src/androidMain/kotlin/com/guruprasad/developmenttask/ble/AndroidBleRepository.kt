@@ -102,6 +102,7 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectJob: Job? = null
     private var scanAutoStopJob: Job? = null
+    private var isIntentionalDisconnect = false
 
     private val _rawScannedDevices = mutableListOf<BleDevice>()
     private val _scannedDevices = MutableStateFlow<List<BleDevice>>(emptyList())
@@ -136,8 +137,15 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                 BluetoothAdapter.STATE_ON -> {
                     Log.d(TAG, "Bluetooth turned ON")
                     _isBluetoothEnabled.value = true
-                    if (_connectionState.value is ConnectionState.BluetoothDisabled) {
-                        _connectionState.value = ConnectionState.Disconnected
+                    _connectionState.value = ConnectionState.Disconnected
+                    // Auto-reconnect to last device if we have one saved
+                    val lastDevice = BleForegroundService.getLastDevice(context)
+                    if (lastDevice != null && !isIntentionalDisconnect) {
+                        Log.d(TAG, "Bluetooth back ON — reconnecting to ${lastDevice.address}")
+                        targetDevice = lastDevice
+                        reconnectAttempts = 0
+                        BleForegroundService.start(context)
+                        performConnect(lastDevice.address)
                     }
                 }
                 BluetoothAdapter.STATE_OFF -> {
@@ -153,6 +161,7 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                     _scannedDevices.value = emptyList()
                     _deviceInfo.value = null
                     _connectionState.value = ConnectionState.BluetoothDisabled
+                    // Do NOT clear saved device — we need it to reconnect when BT turns back on
                     BleForegroundService.stop(context)
                 }
                 BluetoothAdapter.STATE_TURNING_OFF -> {
@@ -278,8 +287,22 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         }
         targetDevice = device
         reconnectAttempts = 0
-        // Persist device so the foreground service can reconnect after process restart
         BleForegroundService.saveLastDevice(context, device.address, device.name)
+        performConnect(device.address)
+    }
+
+    fun connectFromService(device: BleDevice) {
+        if (bluetoothAdapter?.isEnabled != true) {
+            _connectionState.value = ConnectionState.BluetoothDisabled
+            return
+        }
+        if (!hasBluetoothPermissions()) {
+            Log.w(TAG, "connectFromService: permissions not granted")
+            return
+        }
+        targetDevice = device
+        reconnectAttempts = 0
+        Log.d(TAG, "connectFromService: connecting to ${device.address}")
         performConnect(device.address)
     }
 
@@ -307,12 +330,12 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
 
     override fun disconnect() {
         reconnectJob?.cancel()
+        isIntentionalDisconnect = true
         targetDevice = null
         reconnectAttempts = 0
         readQueue.clear()
         isReadingCharacteristic = false
         customBatteryCharUuid = null
-        // Clear saved device — user explicitly disconnected, service must NOT reconnect
         BleForegroundService.clearLastDevice(context)
         mainHandler.post {
             bluetoothGatt?.disconnect()
@@ -322,7 +345,7 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         _connectionState.value = ConnectionState.Disconnected
         _deviceInfo.value = null
         BleForegroundService.stop(context)
-        Log.d(TAG, "Disconnected and cleaned up")
+        Log.d(TAG, "Disconnected and cleaned up (intentional)")
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
@@ -331,6 +354,7 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
             Log.d(TAG, "onConnectionStateChange status=$status newState=$newState")
             when {
                 newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS -> {
+                    isIntentionalDisconnect = false
                     _connectionState.value = ConnectionState.Connected
                     reconnectAttempts = 0
                     BleForegroundService.start(context)
@@ -339,33 +363,30 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
                 newState == BluetoothProfile.STATE_DISCONNECTED -> {
                     gatt.close()
                     bluetoothGatt = null
-                    val wasIntentional = targetDevice == null
-                    if (!wasIntentional && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    if (isIntentionalDisconnect) {
+                        Log.d(TAG, "Intentional disconnect — not reconnecting")
+                        _connectionState.value = ConnectionState.Disconnected
+                        _deviceInfo.value = null
+                        BleForegroundService.stop(context)
+                    } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         scheduleReconnect()
-                    } else if (!wasIntentional) {
-                        // Reconnect attempts exhausted — reset counter so service can retry later
+                    } else {
                         Log.w(TAG, "Max reconnect attempts reached, resetting for service retry")
                         reconnectAttempts = 0
                         _connectionState.value = ConnectionState.Disconnected
                         _deviceInfo.value = null
-                        // Keep foreground service alive — it will call ensureConnected again
-                    } else {
-                        _connectionState.value = ConnectionState.Disconnected
-                        _deviceInfo.value = null
-                        BleForegroundService.stop(context)
                     }
                 }
                 else -> {
                     gatt.close()
                     bluetoothGatt = null
-                    if (targetDevice != null && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    if (!isIntentionalDisconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                         scheduleReconnect()
-                    } else if (targetDevice != null) {
+                    } else if (!isIntentionalDisconnect) {
                         Log.w(TAG, "Max reconnect attempts reached on GATT error, resetting for service retry")
                         reconnectAttempts = 0
                         _connectionState.value = ConnectionState.Disconnected
                         _deviceInfo.value = null
-                        // Keep foreground service alive — it will call ensureConnected again
                     } else {
                         _connectionState.value = ConnectionState.Error("GATT error: status $status")
                         BleForegroundService.stop(context)
@@ -612,7 +633,14 @@ class AndroidBleRepository(private val context: Context) : BleRepository {
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(delay)
-            targetDevice?.let { dev -> performConnect(dev.address) }
+            val device = targetDevice ?: BleForegroundService.getLastDevice(context)
+            if (device != null) {
+                if (targetDevice == null) targetDevice = device
+                performConnect(device.address)
+            } else {
+                Log.w(TAG, "scheduleReconnect: no device found to reconnect to")
+                _connectionState.value = ConnectionState.Disconnected
+            }
         }
     }
 }

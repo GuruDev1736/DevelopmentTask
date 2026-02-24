@@ -20,6 +20,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- Keep CPU alive for BLE connection in background -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Restart service after phone reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Schedule service restart via AlarmManager -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <!-- BLE hardware feature -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -50,6 +60,18 @@
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Boot Receiver: restarts BLE service after phone reboot if device was saved -->
+        <receiver
+            android:name=".ble.BleBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </receiver>
 
         <!-- Accessibility Service: detects clicks and reads visible screen text for logging -->
         <service

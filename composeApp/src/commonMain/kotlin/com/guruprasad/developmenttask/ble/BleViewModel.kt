@@ -99,6 +99,10 @@ class BleViewModel(private val repository: BleRepository) : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         repository.stopScan()
-        repository.disconnect()
+        // Do NOT call repository.disconnect() here.
+        // When the user swipes the app from recents, onCleared() fires.
+        // Calling disconnect() would clear the saved device from SharedPreferences,
+        // which prevents the foreground service from reconnecting after restart.
+        // The foreground service manages the BLE lifecycle independently.
     }
 }
