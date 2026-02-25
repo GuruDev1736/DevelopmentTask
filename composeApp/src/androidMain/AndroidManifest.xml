@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!-- Required on Android 13+ (API 33+) to show ANY notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Keep CPU alive for BLE connection in background -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 

@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import com.guruprasad.developmenttask.BleApplication
 import com.guruprasad.developmenttask.MainActivity
+import com.guruprasad.developmenttask.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -86,7 +87,13 @@ class BleForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        } catch (e: SecurityException) {
+            // On API 34+, startForeground with type connectedDevice throws SecurityException
+            // if BLUETOOTH_CONNECT permission has not been granted yet.
+            Log.w(TAG, "startForeground failed — BT permission not yet granted: ${e.message}")
+        }
         Log.d(TAG, "Service onStartCommand — ensuring BLE connection is live")
         ensureConnected()
         return START_STICKY
@@ -204,7 +211,7 @@ class BleForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("BLE Connected")
             .setContentText("Maintaining connection to your BLE device")
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setSmallIcon(R.drawable.ic_bluetooth_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
